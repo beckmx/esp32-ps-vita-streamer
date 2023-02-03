@@ -1,8 +1,35 @@
-[![Documentation Status](https://readthedocs.com/projects/espressif-esp-iot-solution/badge/?version=latest)](https://docs.espressif.com/projects/espressif-esp-iot-solution/en/latest/?badge=latest)
+## PS Vita streamer for ESP32 S3
+First of all, I stopped this work because I could not go any further, I suspect that my esp32 s3 runs out of usage PSRam and just crashes.
 
+So, what can you test in here. The main modifications are on the file:
+ ```
+    usb_stream.c
+    ```
+This project originally created from Espressif expects a camera with MJPG format, and the PS vita outputs NV12 pixel format if you installed this extension on your device:
+ ```
+    https://github.com/xerpi/vita-udcd-uvc
+    ```
+The version of esp-idf I used was:
+ ```
+    idf.py --version
+    ESP-IDF v5.0
+    ```
+The main project is the modified project from:
+ ```
+    /esp-iot-solution/examples/usb/host/usb_camera_mic_spk
+    ```
+
+You need to compile the project specifying the next commands:
+ ```
+    idf.py set-target esp32s3
+    idf.py build
+    esptool.py -p /dev/tty.usbserial-1110 -b 460800 --before default_reset --after hard_reset --chip esp32s3  write_flash --flash_mode dio --flash_size 2MB --flash_freq 80m 0x0 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 build/usb_camera_mic_spk.bin
+    idf.py monitor -p /dev/tty.usbserial-1110
+    ```
+After that you can plug the PS vita and the ESP32 S3 would recognize it and will try to convert nv12 into jpg, if you dont do that, the ESP32 will send "pictures" but in nv12 format.
+
+I was thinking you can catch them in the browser and make the conversion but I havent tried that yet
 ## Espressif IoT Solution Overview
-
-* [中文版](./README_CN.md)
 
 ESP-IoT-Solution contains device drivers and code frameworks for the development of IoT system, which works as extra components of ESP-IDF and much easier to start.
 

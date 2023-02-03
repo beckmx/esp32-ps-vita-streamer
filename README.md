@@ -6,7 +6,7 @@ So, what can you test in here. The main modifications are on the file:
     usb_stream.c
     ```
 This project originally created from Espressif expects a camera with MJPG format, and the PS vita outputs NV12 pixel format if you installed this extension on your device:
-     ```
+    ```
     https://github.com/xerpi/vita-udcd-uvc
     ```
 The version of esp-idf I used was:
@@ -15,12 +15,12 @@ The version of esp-idf I used was:
     ESP-IDF v5.0
     ```
 The main project is the modified project from:
-     ```
+    ```
     /esp-iot-solution/examples/usb/host/usb_camera_mic_spk
     ```
 
 You need to compile the project specifying the next commands:
-     ```
+    ```
     idf.py set-target esp32s3
     idf.py build
     esptool.py -p /dev/tty.usbserial-1110 -b 460800 --before default_reset --after hard_reset --chip esp32s3  write_flash --flash_mode dio --flash_size 2MB --flash_freq 80m 0x0 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 build/usb_camera_mic_spk.bin

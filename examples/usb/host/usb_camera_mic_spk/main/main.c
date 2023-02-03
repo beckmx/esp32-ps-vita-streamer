@@ -22,14 +22,15 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "usb_stream.h"
+#include <jpeglib.h>
 
 static const char *TAG = "uvc_mic_spk_demo";
 /****************** configure the example working mode *******************************/
 #define ENABLE_UVC_CAMERA_FUNCTION        1        /* enable uvc function */
-#define ENABLE_UAC_MIC_SPK_FUNCTION       1        /* enable uac mic+spk function */
+#define ENABLE_UAC_MIC_SPK_FUNCTION       0        /* enable uac mic+spk function */
 #if (ENABLE_UVC_CAMERA_FUNCTION)
-#define ENABLE_UVC_FRAME_RESOLUTION_ANY   1        /* Using any resolution found from the camera */
-#define ENABLE_UVC_WIFI_XFER              0        /* transfer uvc frame to wifi http */
+#define ENABLE_UVC_FRAME_RESOLUTION_ANY   0        /* Using any resolution found from the camera */
+#define ENABLE_UVC_WIFI_XFER              1        /* transfer uvc frame to wifi http */
 #endif
 #if (ENABLE_UAC_MIC_SPK_FUNCTION)
 #define ENABLE_UAC_FEATURE_CONTROL        0        /* enable feature control(volume, mute) if the module support*/
@@ -41,8 +42,8 @@ static const char *TAG = "uvc_mic_spk_demo";
 #define DEMO_UVC_FRAME_WIDTH        FRAME_RESOLUTION_ANY
 #define DEMO_UVC_FRAME_HEIGHT       FRAME_RESOLUTION_ANY
 #else
-#define DEMO_UVC_FRAME_WIDTH        480
-#define DEMO_UVC_FRAME_HEIGHT       320
+#define DEMO_UVC_FRAME_WIDTH        960
+#define DEMO_UVC_FRAME_HEIGHT       544
 #endif
 #define DEMO_UVC_XFER_BUFFER_SIZE   (35 * 1024) //Double buffer
 #if (ENABLE_UVC_WIFI_XFER)
@@ -66,7 +67,85 @@ void esp_camera_fb_return(camera_fb_t * fb)
     xEventGroupSetBits(s_evt_handle, BIT2_NEW_FRAME_END);
     return;
 }
+#define OUTPUT_BUF_SIZE  4096
+typedef struct {
+    struct jpeg_destination_mgr pub; /* public fields */
 
+    JOCTET * buffer;    /* start of buffer */
+
+    unsigned char *outbuffer;
+    int outbuffer_size;
+    unsigned char *outbuffer_cursor;
+    int *written;
+
+} mjpg_destination_mgr;
+
+typedef mjpg_destination_mgr * mjpg_dest_ptr;
+METHODDEF(void) init_destination(j_compress_ptr cinfo)
+{
+    mjpg_dest_ptr dest = (mjpg_dest_ptr) cinfo->dest;
+
+    /* Allocate the output buffer --- it will be released when done with image */
+    dest->buffer = (JOCTET *)(*cinfo->mem->alloc_small)((j_common_ptr) cinfo, JPOOL_IMAGE, OUTPUT_BUF_SIZE * sizeof(JOCTET));
+
+    *(dest->written) = 0;
+
+    dest->pub.next_output_byte = dest->buffer;
+    dest->pub.free_in_buffer = OUTPUT_BUF_SIZE;
+}
+
+/******************************************************************************
+Description.: called whenever local jpeg buffer fills up
+Input Value.:
+Return Value:
+******************************************************************************/
+METHODDEF(boolean) empty_output_buffer(j_compress_ptr cinfo)
+{
+    mjpg_dest_ptr dest = (mjpg_dest_ptr) cinfo->dest;
+
+    memcpy(dest->outbuffer_cursor, dest->buffer, OUTPUT_BUF_SIZE);
+    dest->outbuffer_cursor += OUTPUT_BUF_SIZE;
+    *(dest->written) += OUTPUT_BUF_SIZE;
+
+    dest->pub.next_output_byte = dest->buffer;
+    dest->pub.free_in_buffer = OUTPUT_BUF_SIZE;
+
+    return TRUE;
+}
+
+/******************************************************************************
+Description.: called by jpeg_finish_compress after all data has been written.
+              Usually needs to flush buffer.
+Input Value.:
+Return Value:
+******************************************************************************/
+METHODDEF(void) term_destination(j_compress_ptr cinfo)
+{
+    mjpg_dest_ptr dest = (mjpg_dest_ptr) cinfo->dest;
+    size_t datacount = OUTPUT_BUF_SIZE - dest->pub.free_in_buffer;
+
+    /* Write any data remaining in the buffer */
+    memcpy(dest->outbuffer_cursor, dest->buffer, datacount);
+    dest->outbuffer_cursor += datacount;
+    *(dest->written) += datacount;
+}
+GLOBAL(void) dest_buffer(j_compress_ptr cinfo, unsigned char *buffer, int size, int *written)
+{
+    mjpg_dest_ptr dest;
+
+    if(cinfo->dest == NULL) {
+        cinfo->dest = (struct jpeg_destination_mgr *)(*cinfo->mem->alloc_small)((j_common_ptr) cinfo, JPOOL_PERMANENT, sizeof(mjpg_destination_mgr));
+    }
+
+    dest = (mjpg_dest_ptr) cinfo->dest;
+    dest->pub.init_destination = init_destination;
+    dest->pub.empty_output_buffer = empty_output_buffer;
+    dest->pub.term_destination = term_destination;
+    dest->outbuffer = buffer;
+    dest->outbuffer_size = size;
+    dest->outbuffer_cursor = buffer;
+    dest->written = written;
+}
 static void camera_frame_cb(uvc_frame_t *frame, void *ptr)
 {
     ESP_LOGI(TAG, "uvc callback! frame_format = %d, seq = %"PRIu32", width = %"PRIu32", height = %"PRIu32", length = %u, ptr = %d",
@@ -74,6 +153,66 @@ static void camera_frame_cb(uvc_frame_t *frame, void *ptr)
 
     switch (frame->frame_format) {
         case UVC_FRAME_FORMAT_MJPEG:
+        ESP_LOGI(TAG, "size of DATA = %u ptr = %u",
+            sizeof(frame->data), frame->data_bytes);
+            struct jpeg_compress_struct cinfo;
+            struct jpeg_error_mgr jerr;
+            JSAMPROW row_pointer[1];
+            unsigned char *line_buffer, *yuyv;
+            int z;
+            static int written;
+            line_buffer = calloc(frame->width * 3, 1);
+            yuyv = frame->data;
+            cinfo.err = jpeg_std_error(&jerr);
+            jpeg_create_compress(&cinfo);
+            dest_buffer(&cinfo, frame->data, frame->data_bytes, &written);
+            ESP_LOGI(TAG, "starting compression--->%u",written);
+
+            cinfo.image_width = frame->width;
+            cinfo.image_height = frame->height;
+            cinfo.input_components = 3;
+            cinfo.in_color_space = JCS_RGB;
+
+            jpeg_set_defaults(&cinfo);
+            jpeg_set_quality(&cinfo, 80, TRUE);//80 means 80% of quality for the JPG image to produce
+            cinfo.comp_info[0].h_samp_factor = 2;
+            cinfo.comp_info[0].v_samp_factor = 2;
+            jpeg_start_compress(&cinfo, TRUE);
+            z = 0;
+            unsigned char* yplane = yuyv;
+            int uvdiv = 2;
+            int uvheight = frame->height;
+            int uvwidth = frame->width;
+            // ------>startn nv12
+            int i=0, j=0;
+            int idx=0;
+        
+            unsigned char* ybase = yuyv;
+            unsigned char *ubase = NULL;
+            ubase=yuyv+uvwidth*uvheight;
+            ESP_LOGI(TAG, "looping--->");
+            while (cinfo.next_scanline < cinfo.image_height)
+            {
+                unsigned char *ptr = line_buffer;
+                idx=0;
+                for(i=0;i<uvwidth;i++)
+                {   
+                    *(ptr++)=ybase[i + j * uvwidth];
+                    *(ptr++)=ubase[j/2 * uvwidth+(i/2)*2];
+                    *(ptr++)=ubase[j/2 * uvwidth+(i/2)*2+1];
+                }
+                ESP_LOGI(TAG, "before_rec--->");
+                row_pointer[0] = (char*)line_buffer;//recasting the line_buffer due to incompatibility with the compiler
+                ESP_LOGI(TAG, "after_rec--->");
+                jpeg_write_scanlines(&cinfo, row_pointer, 1);
+                j++;
+            }
+            ESP_LOGI(TAG, "end lool--->");
+            jpeg_finish_compress(&cinfo);
+            jpeg_destroy_compress(&cinfo);
+
+            free(line_buffer);
+
             s_fb.buf = frame->data;
             s_fb.len = frame->data_bytes;
             s_fb.width = frame->width;
@@ -82,12 +221,12 @@ static void camera_frame_cb(uvc_frame_t *frame, void *ptr)
             s_fb.format = PIXFORMAT_JPEG;
             s_fb.timestamp.tv_sec = frame->sequence;
             xEventGroupSetBits(s_evt_handle, BIT1_NEW_FRAME_START);
-            ESP_LOGV(TAG, "send frame = %"PRIu32"",frame->sequence);
+            ESP_LOGI(TAG, "send frame = %"PRIu32"",frame->sequence);
             xEventGroupWaitBits(s_evt_handle, BIT2_NEW_FRAME_END, true, true, pdTICKS_TO_MS(1000));
-            ESP_LOGV(TAG, "send frame done = %"PRIu32"",frame->sequence);
+            ESP_LOGI(TAG, "send frame done = %"PRIu32"",frame->sequence);
             break;
         default:
-            ESP_LOGW(TAG, "Format not supported");
+            ESP_LOGW(TAG, "========Format not supported=======");
             assert(0);
             break;
     }

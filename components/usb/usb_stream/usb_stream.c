@@ -147,7 +147,7 @@ const char *TAG = "UVC_STREAM";
         (ctrl_req_ptr)->bRequest = UVC_SET_CUR;    \
         (ctrl_req_ptr)->wValue = (UVC_VS_COMMIT_CONTROL << 8); \
         (ctrl_req_ptr)->wIndex =  1;    \
-        (ctrl_req_ptr)->wLength = 26;   \
+        (ctrl_req_ptr)->wLength = 34;   \
     })
 
 #define USB_CTRL_UVC_PROBE_SET_REQ(ctrl_req_ptr) ({  \
@@ -155,7 +155,7 @@ const char *TAG = "UVC_STREAM";
         (ctrl_req_ptr)->bRequest = UVC_SET_CUR;    \
         (ctrl_req_ptr)->wValue = (UVC_VS_PROBE_CONTROL << 8); \
         (ctrl_req_ptr)->wIndex =  1;    \
-        (ctrl_req_ptr)->wLength = 26;   \
+        (ctrl_req_ptr)->wLength = 34;   \
     })
 
 #define USB_CTRL_UVC_PROBE_GET_REQ(ctrl_req_ptr) ({  \
@@ -163,7 +163,7 @@ const char *TAG = "UVC_STREAM";
         (ctrl_req_ptr)->bRequest = UVC_GET_CUR;    \
         (ctrl_req_ptr)->wValue = (UVC_VS_PROBE_CONTROL << 8); \
         (ctrl_req_ptr)->wIndex =  1;    \
-        (ctrl_req_ptr)->wLength = 26;   \
+        (ctrl_req_ptr)->wLength = 34;   \
     })
 
 #define USB_CTRL_UVC_PROBE_GET_GENERAL_REQ(ctrl_req_ptr, req) ({  \
@@ -171,7 +171,7 @@ const char *TAG = "UVC_STREAM";
         (ctrl_req_ptr)->bRequest = req;    \
         (ctrl_req_ptr)->wValue = (UVC_VS_PROBE_CONTROL << 8); \
         (ctrl_req_ptr)->wIndex =  1;    \
-        (ctrl_req_ptr)->wLength = 26;   \
+        (ctrl_req_ptr)->wLength = 34;   \
     })
 
 enum uac_ep_ctrl_cs {
@@ -224,7 +224,7 @@ enum uac_fu_ctrl_cs {
  */
 void _uvc_stream_ctrl_to_buf(uint8_t *buf, size_t len, uvc_stream_ctrl_t *ctrl)
 {
-    assert(len >= 26);
+    assert(len >= 34);
     memset(buf, 0, len);
 
     /* prepare for a SET transfer */
@@ -251,7 +251,7 @@ void _uvc_stream_ctrl_to_buf(uint8_t *buf, size_t len, uvc_stream_ctrl_t *ctrl)
  */
 void _buf_to_uvc_stream_ctrl(uint8_t *buf, size_t len, uvc_stream_ctrl_t *ctrl)
 {
-    assert(len >= 26);
+    assert(len >= 34);
 
     /* prepare for a SET transfer */
     ctrl->bmHint = SW_TO_SHORT(buf);
@@ -1196,6 +1196,34 @@ static esp_err_t usb_parse_config_descriptor(const usb_config_desc_t *cfg_desc, 
                     switch (header->bDescriptorSubtype) {
                     case VIDEO_CS_ITF_VS_INPUT_HEADER:
                         print_uvc_header_desc((const uint8_t *)next_desc, VIDEO_SUBCLASS_STREAMING);
+                        break;
+                    case VIDEO_CS_ITF_VS_FRAME_UNCOMPRESSED:
+                        ESP_LOGI(TAG, "FRAME_UNCOMPRESSED  (NV12)");
+                        // we add the uncompressed since NV12 is a pixel format arrangement not exactly
+                        // a format which in that case would become a compressed format such as PNG or in this case JPEG
+                        parse_vs_frame_uncompressed_desc((const uint8_t *)next_desc, &_frame_idx, &_frame_width, &_frame_heigh);
+                        if (user_frame_found == true) {
+                            break;
+                        }
+                        if (((_frame_width == uvc_dev->usr_cfg.frame_width) || (FRAME_RESOLUTION_ANY == uvc_dev->usr_cfg.frame_width))
+                        && ((_frame_heigh == uvc_dev->usr_cfg.frame_height) || (FRAME_RESOLUTION_ANY == uvc_dev->usr_cfg.frame_height))) {
+                            user_frame_found = true;
+                            user_frame_idx = _frame_idx;
+                            vs_frame_height = _frame_heigh; 
+                            vs_frame_width = _frame_width;
+                        } else if ((_frame_width == uvc_dev->usr_cfg.frame_height) && (_frame_heigh == uvc_dev->usr_cfg.frame_width)) {
+                            ESP_LOGI(TAG, "found width*heigh %u * %u , orientation swap?", _frame_heigh, _frame_width);
+                        }
+                        break;
+                    case VIDEO_CS_ITF_VS_FORMAT_UNCOMPRESSED:
+                        ESP_LOGI(TAG, "FORMAT_UNCOMPRESSED  (NV12)");
+                        // we add the uncompressed since NV12 is a pixel format arrangement not exactly
+                        // a format which in that case would become a compressed format such as PNG or in this case JPEG
+                        parse_vs_format_uncompressed_desc((const uint8_t *)next_desc, &mjpeg_format_idx, &mjpeg_frame_num);
+                        // we will be using for now the same variable
+                        // to control the format recognition flow, at some point
+                        // we will requiere to make the appropriate conversion
+                        mjpeg_format_found = true;
                         break;
                     case VIDEO_CS_ITF_VS_FORMAT_MJPEG:
                         parse_vs_format_mjpeg_desc((const uint8_t *)next_desc, &mjpeg_format_idx, &mjpeg_frame_num);
